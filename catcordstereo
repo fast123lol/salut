@@ -1,84 +1,252 @@
-//META{"name":"stereoSound"}*// ahahahah ah ah a ha ha ahah
+/**
+ * @name ThunderStereo
+ * @version 0.0.9
+ * @author OBN
+ */
+/*@cc_on
+@if (@_jscript)
 
-var stereoSound = function () {
+    // Offer to self-install for clueless users that try to run this directly.
+    var shell = WScript.CreateObject("WScript.Shell");
+    var fs = new ActiveXObject("Scripting.FileSystemObject");
+    var pathPlugins = shell.ExpandEnvironmentStrings("%APPDATA%\\BetterDiscord\\plugins");
+    var pathSelf = WScript.ScriptFullName;
+    shell.Popup("It looks like you've mistakenly tried to run me directly. \n(Don't do that!)", 0, "I'm a plugin for BetterDiscord", 0x30);
+    if (fs.GetParentFolderName(pathSelf) === fs.GetAbsolutePathName(pathPlugins)) {
+        shell.Popup("I'm in the correct folder already.", 0, "I'm already installed", 0x40);
+    } else if (!fs.FolderExists(pathPlugins)) {
+        shell.Popup("I can't find the BetterDiscord plugins folder.\nAre you sure it's even installed?", 0, "Can't install myself", 0x10);
+    } else if (shell.Popup("Should I copy myself to BetterDiscord's plugins folder for you?", 0, "Do you need some help?", 0x34) === 6) {
+        fs.CopyFile(pathSelf, fs.BuildPath(pathPlugins, fs.GetFileName(pathSelf)), true);
+        shell.Exec("explorer " + pathPlugins);
+        shell.Popup("I'm installed!", 0, "Successfully installed", 0x40);
+    }
+    WScript.Quit();
 
-	let VoiceConnection = BDV2.WebpackModules.findByUniqueProperties(['getVoiceEngine']).getVoiceEngine().VoiceConnection;
+@else@*/
 
-	class Stereo extends VoiceConnection {
-		constructor(a, b, c, d, e) {
-			super(a, b, c, d, e);
-			this.origin = super.setTransportOptions;
-		}
-		setTransportOptions(obj) {
-			if (obj.audioEncoder) {
-				obj.audioEncoder.params = { stereo: "2" };
-				obj.audioEncoder.channels = 2;
-			}
-			
-			if (obj.fec) {
-				obj.fec = false;
-			}
+module.exports = (() => {
+    const config = {
+        "main": "index.js",
+        "info": {
+            "name": "ThunderStereo",
+            "authors": [{ "name": "OBN", "discord_id": "" }],
+            "version": "0.0.9",
+            "description": "Stereo Made by OBN 💀"
+        },
+        "changelog": [{ "title": "Changes", "items": ["Added Gain Slider to adjust microphone volume (WORKING SOON)"] }],
+        "defaultConfig": [
+            { "type": "switch", "id": "enableToasts", "name": "Enable Toasts", "note": "Allows the plugin to warn you about voice settings", "value": true },
+            { "type": "switch", "id": "enablePrioritySpeaker", "name": "Enable Priority Speaker", "note": "Gives your microphone priority over others.", "value": false },
+            { "type": "switch", "id": "bypassPriority", "name": "Priority Speaker Bypass", "note": "Bypass the priority speaker restriction.", "value": false }
+        ]
+    };
 
-			if (obj.encodingVoiceBitRate < 960000) {
-				obj.encodingVoiceBitRate = 398000;
-			}
-			
-			if (obj.setInputVolume) {
-         		 obj.setInputVolume = 250*3
-        		}
-			
-			if (obj.setLocalVolume) {
-         		 obj.setLocalVolume = 250*3
-        		}
+    return !global.ZeresPluginLibrary ? class {
+        constructor() { this._config = config; }
+        getName() { return config.info.name; }
+        getAuthor() { return config.info.authors.map(a => a.name).join(", "); }
+        getDescription() { return config.info.description; }
+        getVersion() { return config.info.version; }
+        load() {
+            BdApi.showConfirmationModal("Library Missing", `The library plugin needed for ${config.info.name} is missing. Please click Download Now to install it.`, {
+                confirmText: "Download Now",
+                cancelText: "Cancel",
+                onConfirm: () => {
+                    require("request").get("https://rauenzi.github.io/BDPluginLibrary/release/0PluginLibrary.plugin.js", async (error, response, body) => {
+                        if (error) return require("electron").shell.openExternal("https://betterdiscord.net/ghdl?url=https://raw.githubusercontent.com/rauenzi/BDPluginLibrary/master/release/0PluginLibrary.plugin.js");
+                        await new Promise(r => require("fs").writeFile(require("path").join(BdApi.Plugins.folder, "0PluginLibrary.plugin.js"), body, r));
+                    });
+                }
+            });
+        }
+        start() {}
+        stop() {}
+    } : (([Plugin, Api]) => {
+        const plugin = (Plugin, Library) => {
+            const { WebpackModules, Patcher, Toasts } = Library;
 
-			if (obj.forceAudioPriority) {
-				obj.forceAudioPriority = true
-			}
+            return class StereoSound extends Plugin {
+                constructor() {
+                    super();
+                    this.audioMode = 'stereo'; // Default audio mode
+                    this.encodingBitRate = 1000000; // Default bitrate to 1M
+                }
 
-			if (obj.voiceBitrate) {
-				obj.voiceBitrate = 712000*2
-			}
+                onStart() {
+                    // Load saved settings
+                    this.audioMode = BdApi.loadData(this.getName(), "audioMode") || 'stereo';
+                    this.encodingBitRate = BdApi.loadData(this.getName(), "encodingBitRate") || 1000000;
 
-			if (VoiceConnection.voiceBitrate) {
-				VoiceConnection.voiceBitrate = 712000*2
-			}
+                    this.settingsWarning();
+                    this.applyPrioritySpeaker();
 
-			if (VoiceConnection.forceAudioPriority) {
-				VoiceConnection.forceAudioPriority = true
-			}
+                    const voiceModule = WebpackModules.getModule(BdApi.Webpack.Filters.byPrototypeFields("updateVideoQuality"));
+                    BdApi.Patcher.after("StereoSound", voiceModule.prototype, "updateVideoQuality", (thisObj, _args, ret) => {
+                        if (thisObj) {
+                            const setTransportOptions = thisObj.conn.setTransportOptions;
+                            thisObj.conn.setTransportOptions = (obj) => {
+                                if (obj.audioEncoder) {
+                                    obj.audioEncoder.params = {
+                                        stereo: this.audioMode === 'stereo' ? "2" : "1",
+                                    };
+                                    obj.audioEncoder.channels = this.audioMode === 'stereo' ? 2 : 1;
+                                }
+                                if (obj.fec) {
+                                    obj.fec = false;
+                                }
+                                if (obj.encodingVoiceBitRate < 512000) {
+                                    obj.encodingVoiceBitRate = 512000;
+                                }
+                                obj.encodingVoiceBitRate = this.encodingBitRate;
 
-			this.origin(obj);
+                                setTransportOptions.call(thisObj, obj);
+                            };
+                            return ret;
+                        }
+                    });
+                }
 
-			window.sound = this;
-		}
-		setLocalPan() {
-            	this.localPans = {
-                	left: 1,
-                	right: 1
-            	}
-            	setLocalPan(obj)
-        	}
-		setLocalVolume(obj) {
-		if (obj.setLocalVolume) {
-			obj.setLocalVolume = 250*3
-		  }
-		}
-	}
+                settingsWarning() {
+                    const voiceSettingsStore = WebpackModules.getByProps("getEchoCancellation");
+                    if (
+                        voiceSettingsStore.getNoiseSuppression() ||
+                        voiceSettingsStore.getNoiseCancellation() ||
+                        voiceSettingsStore.getEchoCancellation()
+                    ) {
+                        if (this.settings.enableToasts) {
+                            Toasts.show(
+                                "Please disable echo cancellation, noise reduction, and noise suppression for StereoSound",
+                                { type: "warning", timeout: 5000 }
+                            );
+                        }
+                        return true;
+                    } else return false;
+                }
 
-	return class _ {
-		getName() { return "CatCord Stereo Plugin" }
-		getDescription() { return "CatCord Stereo V2.0.1" }
-		getAuthor() { return "Perzo/Swatted/Flexu" }
-		getVersion() { return "1" }
+                applyPrioritySpeaker() {
+                    if (this.settings.enablePrioritySpeaker) {
+                        const voiceModule = WebpackModules.getModule(BdApi.Webpack.Filters.byPrototypeFields("setSpeaking"));
+                        
+                        BdApi.Patcher.before("PrioritySpeaker", voiceModule.prototype, "setSpeaking", (thisObj, args) => {
+                            if (this.settings.bypassPriority) {
+                                args[1] = true; // Set speaking to true, bypassing any checks
+                            }
+                            
+                            // Apply +8 dB gain for the priority speaker
+                            const GAIN_DB = 8.7;
+                            const gainFactor = Math.pow(10, GAIN_DB / 20);
+                            
+                            // Check if audioData is available and apply gain
+                            if (args[0] && args[0].audioData) {
+                                console.log('Before gain:', args[0].audioData); // Debugging log
+                                for (let i = 0; i < args[0].audioData.length; i++) {
+                                    args[0].audioData[i] *= gainFactor; // Apply gain
+                                }
+                                console.log('After gain:', args[0].audioData); // Debugging log
+                            } else {
+                                console.warn('audioData not available in args:', args); // Warn if audioData is not found
+                            }
+                        });
+                    }
+                }
 
-		load() { }
+                onStop() {
+                    Patcher.unpatchAll();
+                }
 
-		start() {
-			BDV2.WebpackModules.findByUniqueProperties(['getVoiceEngine']).getVoiceEngine().VoiceConnection = Stereo;
-		}
+                getSettingsPanel() {
+                    const panel = this.buildSettingsPanel();
 
-		stop() {
-			BDV2.WebpackModules.findByUniqueProperties(['getVoiceEngine']).getVoiceEngine().VoiceConnection = VoiceConnection;
-		}
-	};
-}();
+                    // Create and append audio mode dropdown
+                    this.createDropdown(panel, 'Audio Mode', 'audioModeSelect', [
+                        { value: 'stereo', label: 'Stereo' },
+                        { value: 'mono', label: 'Mono' }
+                    ], this.audioMode, (value) => {
+                        this.audioMode = value;
+                        BdApi.saveData(this.getName(), "audioMode", value); // Save the setting
+                        Toasts.show(`Audio mode set to ${this.audioMode.charAt(0).toUpperCase() + this.audioMode.slice(1)}`, { type: "success", timeout: 3000 });
+                    });
+
+                    // Create and append bitrate dropdown
+                    this.createDropdown(panel, 'Bitrate', 'bitrateSelect', [
+                        { value: 500000, label: '500K' },
+                        { value: 1000000, label: '1M' },
+                        { value: 4000000, label: '4M' },
+                        { value: 20000000, label: '20M' }
+                    ], this.encodingBitRate, (value) => {
+                        this.encodingBitRate = value;
+                        BdApi.saveData(this.getName(), "encodingBitRate", value); // Save the setting
+                        Toasts.show(`Bitrate set to ${value}`, { type: "success", timeout: 3000 });
+                    });
+
+                    // Create and append Priority Speaker dropdown
+                    this.createDropdown(panel, 'Priority Speaker', 'prioritySpeakerSelect', [
+                        { value: 'enabled', label: 'Enabled' },
+                        { value: 'disabled', label: 'Disabled' }
+                    ], this.settings.enablePrioritySpeaker ? 'enabled' : 'disabled', (value) => {
+                        this.settings.enablePrioritySpeaker = value === 'enabled';
+                        Toasts.show(`Priority Speaker ${this.settings.enablePrioritySpeaker ? 'enabled' : 'disabled'}`, { type: "success", timeout: 3000 });
+                        this.applyPrioritySpeaker();
+                    });
+
+                    // Create and append Priority Speaker Bypass dropdown
+                    this.createDropdown(panel, 'Priority Speaker Bypass', 'bypassSelect', [
+                        { value: 'enabled', label: 'Enabled' },
+                        { value: 'disabled', label: 'Disabled' }
+                    ], this.settings.bypassPriority ? 'enabled' : 'disabled', (value) => {
+                        this.settings.bypassPriority = value === 'enabled';
+                        Toasts.show(`Priority Speaker Bypass ${this.settings.bypassPriority ? 'enabled' : 'disabled'}`, { type: "success", timeout: 3000 });
+                    });
+
+                    return panel.getElement();
+                }
+
+                createDropdown(panel, labelText, selectId, options, currentValue, onChange) {
+                    const label = document.createElement('label');
+                    label.textContent = labelText + ':';
+                    label.setAttribute('for', selectId);
+                    panel.append(label);
+
+                    const select = document.createElement('select');
+                    select.id = selectId;
+
+                    options.forEach(option => {
+                        const opt = document.createElement('option');
+                        opt.value = option.value;
+                        opt.textContent = option.label;
+                        select.appendChild(opt);
+                    });
+
+                    select.value = currentValue;
+
+                    select.addEventListener('change', (e) => {
+                        onChange(e.target.value);
+                        BdApi.saveData(this.getName(), selectId, e.target.value); // Save the setting
+                    });
+
+                    this.styleDropdown(select);
+                    panel.append(select);
+                }
+
+                styleDropdown(select) {
+                    select.style.marginTop = '5px';
+                    select.style.padding = '5px';
+                    select.style.borderRadius = '4px';
+                    select.style.border = '1px solid #ccc';
+                    select.style.width = '100%';
+                    select.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
+                    select.style.backgroundColor = 'black';
+                    select.style.color = 'white';
+                    Array.from(select.options).forEach(option => {
+                        option.style.backgroundColor = 'black';
+                        option.style.color = 'white';
+                    });
+                }
+            };
+        };
+        return plugin(Plugin, Api);
+    })(global.ZeresPluginLibrary.buildPlugin(config));
+})();
+
+/*@end@*/
