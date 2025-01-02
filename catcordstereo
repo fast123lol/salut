@@ -2,6 +2,7 @@
  * @name ThunderStereo
  * @version 0.0.9
  * @author OBN
+ * @description Stereo Sound for Discord - By OBN 💀
  */
 
 module.exports = (() => {
@@ -21,7 +22,7 @@ module.exports = (() => {
         ]
     };
 
-    return !global.ZeresPluginLibrary ? class {
+    return !global.BDV2 ? class {
         constructor() { this._config = config; }
         getName() { return config.info.name; }
         getAuthor() { return config.info.authors.map(a => a.name).join(", "); }
@@ -60,34 +61,31 @@ module.exports = (() => {
                     this.settingsWarning();
                     this.applyPrioritySpeaker();
 
-                    const voiceModule = WebpackModules.getModule(BdApi.Webpack.Filters.byPrototypeFields("updateVideoQuality"));
-                    BdApi.Patcher.after("ThunderStereo", voiceModule.prototype, "updateVideoQuality", (thisObj, _args, ret) => {
-                        if (thisObj) {
-                            const setTransportOptions = thisObj.conn.setTransportOptions;
-                            thisObj.conn.setTransportOptions = (obj) => {
-                                // Apply stereo audio settings
-                                if (obj.audioEncoder) {
-                                    obj.audioEncoder.params = {
-                                        stereo: this.audioMode === 'stereo' ? "2" : "1",
-                                    };
-                                    obj.audioEncoder.channels = this.audioMode === 'stereo' ? 2 : 1;
-                                }
+                    // Get the VoiceConnection module
+                    const voiceEngine = WebpackModules.getModule(BdApi.Webpack.Filters.byProps("getVoiceEngine"));
+                    const VoiceConnection = voiceEngine.getVoiceEngine().VoiceConnection;
 
-                                // Apply bitrate settings
-                                if (obj.encodingVoiceBitRate < 512000) {
-                                    obj.encodingVoiceBitRate = 512000;
-                                }
-                                obj.encodingVoiceBitRate = this.encodingBitRate;
+                    Patcher.before("ThunderStereo", VoiceConnection.prototype, "setTransportOptions", (_, args) => {
+                        const obj = args[0];
 
-                                // Disable Forward Error Correction (FEC)
-                                if (obj.fec) {
-                                    obj.fec = false;
-                                }
-
-                                setTransportOptions.call(thisObj, obj);
+                        if (obj.audioEncoder) {
+                            obj.audioEncoder.params = {
+                                stereo: this.audioMode === 'stereo' ? "2" : "1",
                             };
-                            return ret;
+                            obj.audioEncoder.channels = this.audioMode === 'stereo' ? 2 : 1;
                         }
+
+                        if (obj.encodingVoiceBitRate < 512000) {
+                            obj.encodingVoiceBitRate = 512000;
+                        }
+                        obj.encodingVoiceBitRate = this.encodingBitRate;
+
+                        // Disable Forward Error Correction (FEC)
+                        if (obj.fec) {
+                            obj.fec = false;
+                        }
+
+                        return args;
                     });
                 }
 
@@ -112,7 +110,7 @@ module.exports = (() => {
                     if (this.settings.enablePrioritySpeaker) {
                         const voiceModule = WebpackModules.getModule(BdApi.Webpack.Filters.byPrototypeFields("setSpeaking"));
                         
-                        BdApi.Patcher.before("PrioritySpeaker", voiceModule.prototype, "setSpeaking", (thisObj, args) => {
+                        Patcher.before("PrioritySpeaker", voiceModule.prototype, "setSpeaking", (thisObj, args) => {
                             if (this.settings.bypassPriority) {
                                 args[1] = true; // Set speaking to true, bypassing any checks
                             }
