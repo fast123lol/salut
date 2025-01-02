@@ -69,7 +69,7 @@ var stereoSound = function () {
 		getName() { return "CatCord Stereo Plugin" }
 		getDescription() { return "CatCord Public Stereo" }
 		getAuthor() { return "CatCordSociety" }
-		getVersion() { return "1" }
+		getVersion() { return "shhhhh" }
 
 		load() { }
 
