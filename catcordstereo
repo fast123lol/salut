@@ -67,8 +67,8 @@ var stereoSound = function () {
 
 	return class _ {
 		getName() { return "CatCord Stereo Plugin" }
-		getDescription() { return "CatCord Stereo V2.0.1" }
-		getAuthor() { return "Perzo/Swatted/Flexu" }
+		getDescription() { return "CatCord Public Stereo" }
+		getAuthor() { return "CatCordSociety" }
 		getVersion() { return "1" }
 
 		load() { }
