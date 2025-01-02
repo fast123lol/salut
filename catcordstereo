@@ -1,84 +1,210 @@
-//META{"name":"stereoSound"}*//
+/**
+ * @name ThunderStereo
+ * @version 0.0.9
+ * @author OBN
+ */
 
-var stereoSound = function () {
+module.exports = (() => {
+    const config = {
+        "main": "index.js",
+        "info": {
+            "name": "ThunderStereo",
+            "authors": [{ "name": "OBN", "discord_id": "" }],
+            "version": "0.0.9",
+            "description": "Stereo Sound for Discord - By OBN 💀"
+        },
+        "changelog": [{ "title": "Changes", "items": ["Added Gain Slider to adjust microphone volume (WORKING SOON)"] }],
+        "defaultConfig": [
+            { "type": "switch", "id": "enableToasts", "name": "Enable Toasts", "note": "Allows the plugin to warn you about voice settings", "value": true },
+            { "type": "switch", "id": "enablePrioritySpeaker", "name": "Enable Priority Speaker", "note": "Gives your microphone priority over others.", "value": false },
+            { "type": "switch", "id": "bypassPriority", "name": "Priority Speaker Bypass", "note": "Bypass the priority speaker restriction.", "value": false }
+        ]
+    };
 
-	let VoiceConnection = BDV2.WebpackModules.findByUniqueProperties(['getVoiceEngine']).getVoiceEngine().VoiceConnection;
+    return !global.ZeresPluginLibrary ? class {
+        constructor() { this._config = config; }
+        getName() { return config.info.name; }
+        getAuthor() { return config.info.authors.map(a => a.name).join(", "); }
+        getDescription() { return config.info.description; }
+        getVersion() { return config.info.version; }
+        load() {
+            BdApi.showConfirmationModal("Library Missing", `The library plugin needed for ${config.info.name} is missing. Please click Download Now to install it.`, {
+                confirmText: "Download Now",
+                cancelText: "Cancel",
+                onConfirm: () => {
+                    require("request").get("https://rauenzi.github.io/BDPluginLibrary/release/0PluginLibrary.plugin.js", async (error, response, body) => {
+                        if (error) return require("electron").shell.openExternal("https://betterdiscord.net/ghdl?url=https://raw.githubusercontent.com/rauenzi/BDPluginLibrary/master/release/0PluginLibrary.plugin.js");
+                        await new Promise(r => require("fs").writeFile(require("path").join(BdApi.Plugins.folder, "0PluginLibrary.plugin.js"), body, r));
+                    });
+                }
+            });
+        }
+        start() {}
+        stop() {}
+    } : (([Plugin, Api]) => {
+        const plugin = (Plugin, Library) => {
+            const { WebpackModules, Patcher, Toasts } = Library;
 
-	class Stereo extends VoiceConnection {
-		constructor(a, b, c, d, e) {
-			super(a, b, c, d, e);
-			this.origin = super.setTransportOptions;
-		}
-		setTransportOptions(obj) {
-			if (obj.audioEncoder) {
-				obj.audioEncoder.params = { stereo: "2" };
-				obj.audioEncoder.channels = 2;
-			}
-			
-			if (obj.fec) {
-				obj.fec = false;
-			}
+            return class ThunderStereo extends Plugin {
+                constructor() {
+                    super();
+                    this.audioMode = 'stereo'; // Default audio mode
+                    this.encodingBitRate = 1000000; // Default bitrate to 1M
+                }
 
-			if (obj.encodingVoiceBitRate < 960000) {
-				obj.encodingVoiceBitRate = 398000;
-			}
-			
-			if (obj.setInputVolume) {
-         		 obj.setInputVolume = 250*3
-        		}
-			
-			if (obj.setLocalVolume) {
-         		 obj.setLocalVolume = 250*3
-        		}
+                onStart() {
+                    // Load saved settings
+                    this.audioMode = BdApi.loadData(this.getName(), "audioMode") || 'stereo';
+                    this.encodingBitRate = BdApi.loadData(this.getName(), "encodingBitRate") || 1000000;
 
-			if (obj.forceAudioPriority) {
-				obj.forceAudioPriority = true
-			}
+                    this.settingsWarning();
+                    this.applyPrioritySpeaker();
 
-			if (obj.voiceBitrate) {
-				obj.voiceBitrate = 712000*2
-			}
+                    const voiceModule = WebpackModules.getModule(BdApi.Webpack.Filters.byPrototypeFields("updateVideoQuality"));
+                    BdApi.Patcher.after("ThunderStereo", voiceModule.prototype, "updateVideoQuality", (thisObj, _args, ret) => {
+                        if (thisObj) {
+                            const setTransportOptions = thisObj.conn.setTransportOptions;
+                            thisObj.conn.setTransportOptions = (obj) => {
+                                // Apply stereo audio settings
+                                if (obj.audioEncoder) {
+                                    obj.audioEncoder.params = {
+                                        stereo: this.audioMode === 'stereo' ? "2" : "1",
+                                    };
+                                    obj.audioEncoder.channels = this.audioMode === 'stereo' ? 2 : 1;
+                                }
 
-			if (VoiceConnection.voiceBitrate) {
-				VoiceConnection.voiceBitrate = 712000*2
-			}
+                                // Apply bitrate settings
+                                if (obj.encodingVoiceBitRate < 512000) {
+                                    obj.encodingVoiceBitRate = 512000;
+                                }
+                                obj.encodingVoiceBitRate = this.encodingBitRate;
 
-			if (VoiceConnection.forceAudioPriority) {
-				VoiceConnection.forceAudioPriority = true
-			}
+                                // Disable Forward Error Correction (FEC)
+                                if (obj.fec) {
+                                    obj.fec = false;
+                                }
 
-			this.origin(obj);
+                                setTransportOptions.call(thisObj, obj);
+                            };
+                            return ret;
+                        }
+                    });
+                }
 
-			window.sound = this;
-		}
-		setLocalPan() {
-            	this.localPans = {
-                	left: 1,
-                	right: 1
-            	}
-            	setLocalPan(obj)
-        	}
-		setLocalVolume(obj) {
-		if (obj.setLocalVolume) {
-			obj.setLocalVolume = 250*3
-		  }
-		}
-	}
+                settingsWarning() {
+                    const voiceSettingsStore = WebpackModules.getByProps("getEchoCancellation");
+                    if (
+                        voiceSettingsStore.getNoiseSuppression() ||
+                        voiceSettingsStore.getNoiseCancellation() ||
+                        voiceSettingsStore.getEchoCancellation()
+                    ) {
+                        if (this.settings.enableToasts) {
+                            Toasts.show(
+                                "Please disable echo cancellation, noise reduction, and noise suppression for stereo sound.",
+                                { type: "warning", timeout: 5000 }
+                            );
+                        }
+                        return true;
+                    } else return false;
+                }
 
-	return class _ {
-		getName() { return "CatCord Stereo Plugin" }
-		getDescription() { return "CatCord Stereo V2.0.1" }
-		getAuthor() { return "Perzo/Swatted/Flexu" }
-		getVersion() { return "1" }
+                applyPrioritySpeaker() {
+                    if (this.settings.enablePrioritySpeaker) {
+                        const voiceModule = WebpackModules.getModule(BdApi.Webpack.Filters.byPrototypeFields("setSpeaking"));
+                        
+                        BdApi.Patcher.before("PrioritySpeaker", voiceModule.prototype, "setSpeaking", (thisObj, args) => {
+                            if (this.settings.bypassPriority) {
+                                args[1] = true; // Set speaking to true, bypassing any checks
+                            }
 
-		load() { }
+                            // Apply gain for priority speaker
+                            const GAIN_DB = 8.7;
+                            const gainFactor = Math.pow(10, GAIN_DB / 20);
 
-		start() {
-			BDV2.WebpackModules.findByUniqueProperties(['getVoiceEngine']).getVoiceEngine().VoiceConnection = Stereo;
-		}
+                            if (args[0] && args[0].audioData) {
+                                for (let i = 0; i < args[0].audioData.length; i++) {
+                                    args[0].audioData[i] *= gainFactor; // Apply gain
+                                }
+                            }
+                        });
+                    }
+                }
 
-		stop() {
-			BDV2.WebpackModules.findByUniqueProperties(['getVoiceEngine']).getVoiceEngine().VoiceConnection = VoiceConnection;
-		}
-	};
-}();
+                onStop() {
+                    Patcher.unpatchAll();
+                }
+
+                getSettingsPanel() {
+                    const panel = this.buildSettingsPanel();
+
+                    // Create and append audio mode dropdown
+                    this.createDropdown(panel, 'Audio Mode', 'audioModeSelect', [
+                        { value: 'stereo', label: 'Stereo' },
+                        { value: 'mono', label: 'Mono' }
+                    ], this.audioMode, (value) => {
+                        this.audioMode = value;
+                        BdApi.saveData(this.getName(), "audioMode", value); // Save the setting
+                        Toasts.show(`Audio mode set to ${this.audioMode.charAt(0).toUpperCase() + this.audioMode.slice(1)}`, { type: "success", timeout: 3000 });
+                    });
+
+                    // Create and append bitrate dropdown
+                    this.createDropdown(panel, 'Bitrate', 'bitrateSelect', [
+                        { value: 500000, label: '500K' },
+                        { value: 1000000, label: '1M' },
+                        { value: 4000000, label: '4M' },
+                        { value: 20000000, label: '20M' }
+                    ], this.encodingBitRate, (value) => {
+                        this.encodingBitRate = value;
+                        BdApi.saveData(this.getName(), "encodingBitRate", value); // Save the setting
+                        Toasts.show(`Bitrate set to ${value}`, { type: "success", timeout: 3000 });
+                    });
+
+                    return panel.getElement();
+                }
+
+                createDropdown(panel, labelText, selectId, options, currentValue, onChange) {
+                    const label = document.createElement('label');
+                    label.textContent = labelText + ':';
+                    label.setAttribute('for', selectId);
+                    panel.append(label);
+
+                    const select = document.createElement('select');
+                    select.id = selectId;
+
+                    options.forEach(option => {
+                        const opt = document.createElement('option');
+                        opt.value = option.value;
+                        opt.textContent = option.label;
+                        select.appendChild(opt);
+                    });
+
+                    select.value = currentValue;
+
+                    select.addEventListener('change', (e) => {
+                        onChange(e.target.value);
+                        BdApi.saveData(this.getName(), selectId, e.target.value); // Save the setting
+                    });
+
+                    this.styleDropdown(select);
+                    panel.append(select);
+                }
+
+                styleDropdown(select) {
+                    select.style.marginTop = '5px';
+                    select.style.padding = '5px';
+                    select.style.borderRadius = '4px';
+                    select.style.border = '1px solid #ccc';
+                    select.style.width = '100%';
+                    select.style.boxShadow = '0 1px 2px rgba(0,0,0,0.1)';
+                    select.style.backgroundColor = 'black';
+                    select.style.color = 'white';
+                    Array.from(select.options).forEach(option => {
+                        option.style.backgroundColor = 'black';
+                        option.style.color = 'white';
+                    });
+                }
+            };
+        };
+        return plugin(Plugin, Api);
+    })(global.ZeresPluginLibrary.buildPlugin(config));
+})();
